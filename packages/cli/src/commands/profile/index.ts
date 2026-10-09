@@ -1,4 +1,6 @@
-import { writeFile } from "node:fs/promises"
+import { spawn } from "node:child_process"
+import { constants } from "node:fs"
+import { access, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Command } from "commander"
 import { readGlobalConfig } from "../../config/files"
@@ -52,6 +54,24 @@ export async function addProfile(name: string, options: ProfileAddOptions): Prom
 		const metadata = join(stage, "ocx.jsonc")
 		if (!(await Bun.file(metadata).exists()))
 			await writeFile(metadata, DEFAULT_OCX_CONFIG_TEMPLATE, { mode: 0o600 })
+	})
+}
+
+export async function runProfileDoctor(name: string | undefined): Promise<number> {
+	const manager = ProfileManager.create()
+	const selected = await manager.resolveProfile(name)
+	const doctor = join(getProfileDir(selected), "doctor")
+	try {
+		await access(doctor, constants.X_OK)
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			throw new ConfigError(`Profile "${selected}" has no executable doctor script at ${doctor}.`)
+		throw new ConfigError(`Profile doctor is not executable: ${doctor}`)
+	}
+	return await new Promise((resolve, reject) => {
+		const child = spawn(doctor, { stdio: "inherit" })
+		child.on("error", reject)
+		child.on("close", (code) => resolve(code ?? 1))
 	})
 }
 
@@ -134,6 +154,22 @@ export function registerProfileCommand(program: Command): void {
 					if (result.warnActiveProfile)
 						console.error(`Update OCX_PROFILE to "${newName}" in your shell.`)
 				}
+			} catch (error) {
+				handleError(error, { json: options.json })
+			}
+		})
+	parent
+		.command("doctor")
+		.description("Run the profile-owned doctor script")
+		.option("-p, --profile <name>", "Profile to check")
+		.option("--json", "Output JSON")
+		.action(async (options: OutputOptions & { profile?: string }) => {
+			try {
+				if (!options.profile) throw new ValidationError("Usage: ocx profile doctor --profile <name>")
+				const selected = await ProfileManager.create().resolveProfile(options.profile)
+				const exitCode = await runProfileDoctor(selected)
+				if (options.json) outputJson({ success: exitCode === 0, profile: selected, exitCode })
+				if (exitCode !== 0) process.exitCode = exitCode
 			} catch (error) {
 				handleError(error, { json: options.json })
 			}
