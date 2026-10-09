@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test"
+import { describe, expect, it, mock } from "bun:test"
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -80,6 +80,43 @@ describe("profile doctor", () => {
 				process.stdout.write = originalWrite
 			}
 			expect(lines.join("")).not.toContain("not json")
+		})
+	})
+
+	it("launches Windows script doctors through cmd.exe", async () => {
+		await withIsolatedConfig(async () => {
+			await ProfileManager.create().add("windows")
+			const doctor = join(getProfileDir("windows"), "doctor")
+			await writeFile(doctor, "@echo off\r\nexit /b 0\r\n")
+			const originalPlatform = process.platform
+			Object.defineProperty(process, "platform", { value: "win32" })
+			let command = ""
+			let args: readonly string[] = []
+			const spawned = {
+				stdout: undefined,
+				on(event: string, listener: (value?: number) => void) {
+					if (event === "close") listener(0)
+					return spawned
+				},
+			}
+			mock.module("node:child_process", () => ({
+				spawn: (file: string, commandArgs: readonly string[] = []) => {
+					command = file
+					args = commandArgs
+					return spawned
+				},
+			}))
+			try {
+				const { runProfileDoctor: runWindowsDoctor } = await import(
+					`../../src/commands/profile/index?windows=${Date.now()}`
+				)
+				expect(await runWindowsDoctor("windows")).toBe(0)
+			} finally {
+				mock.restore()
+				Object.defineProperty(process, "platform", { value: originalPlatform })
+			}
+			expect(command.toLowerCase()).toContain("cmd")
+			expect(args).toContain(doctor)
 		})
 	})
 

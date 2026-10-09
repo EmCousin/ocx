@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process"
 import { constants } from "node:fs"
 import { access, lstat, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { extname, join } from "node:path"
 import type { Command } from "commander"
 import { readGlobalConfig } from "../../config/files"
 import { DEFAULT_OCX_CONFIG_TEMPLATE, ProfileManager } from "../../profile/manager"
@@ -85,10 +85,16 @@ export async function runProfileDoctor(
 	const selected = await manager.resolveProfile(name)
 	const doctor = join(getProfileDir(selected), "doctor")
 	await assertDoctorFile(selected, doctor)
+	const windowsScript = process.platform === "win32" && extname(doctor).toLowerCase() !== ".exe"
 	return await new Promise((resolve, reject) => {
-		const child = spawn(doctor, {
-			stdio: options.json ? ["ignore", "pipe", "inherit"] : "inherit",
-		})
+		const child = windowsScript
+			? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", doctor], {
+					stdio: options.json ? ["ignore", "pipe", "inherit"] : "inherit",
+					windowsVerbatimArguments: true,
+				})
+			: spawn(doctor, {
+					stdio: options.json ? ["ignore", "pipe", "inherit"] : "inherit",
+				})
 		child.stdout?.resume()
 		child.on("error", reject)
 		child.on("close", (code) => resolve(code ?? 1))
