@@ -57,6 +57,17 @@ export async function addProfile(name: string, options: ProfileAddOptions): Prom
 	})
 }
 
+async function resolveDoctorPath(selected: string): Promise<string> {
+	const doctor = join(getProfileDir(selected), "doctor")
+	if (process.platform !== "win32") return doctor
+	try {
+		if ((await lstat(`${doctor}.exe`)).isFile()) return `${doctor}.exe`
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+	}
+	return doctor
+}
+
 async function assertDoctorFile(selected: string, doctor: string): Promise<void> {
 	let stats: Awaited<ReturnType<typeof lstat>>
 	try {
@@ -84,7 +95,8 @@ export interface ProfileDoctorResult {
 }
 
 function quoteCmdPath(path: string): string {
-	return `"${path.replaceAll('"', '""')}"`
+	const quoted = `"${path.replaceAll('"', '""')}"`
+	return `""${quoted}"`
 }
 
 function collectStream(stream: NodeJS.ReadableStream | null, chunks: Buffer[]): void {
@@ -97,7 +109,7 @@ export async function runProfileDoctor(
 ): Promise<ProfileDoctorResult> {
 	const manager = ProfileManager.create()
 	const selected = await manager.resolveProfile(name)
-	const doctor = join(getProfileDir(selected), "doctor")
+	const doctor = await resolveDoctorPath(selected)
 	await assertDoctorFile(selected, doctor)
 	const windowsScript = process.platform === "win32" && extname(doctor).toLowerCase() !== ".exe"
 	const stdout: Buffer[] = []
@@ -224,7 +236,10 @@ export function registerProfileCommand(program: Command): void {
 						stdout: result.stdout,
 						stderr: result.stderr,
 					})
-				if (result.exitCode !== 0) process.exit(result.exitCode)
+				if (result.exitCode !== 0) {
+					await new Promise((resolve) => process.stdout.write("", resolve))
+					process.exit(result.exitCode)
+				}
 			} catch (error) {
 				handleError(error, { json: options.json })
 			}

@@ -20,8 +20,10 @@ async function withIsolatedConfig(run: () => Promise<void>): Promise<void> {
 	}
 }
 
+const unix = process.platform === "win32" ? it.skip : it
+
 describe("profile doctor", () => {
-	it("runs the executable doctor owned by the selected profile", async () => {
+	unix("runs the executable doctor owned by the selected profile", async () => {
 		await withIsolatedConfig(async () => {
 			await ProfileManager.create().add("checked")
 			const doctor = join(getProfileDir("checked"), "doctor")
@@ -32,7 +34,7 @@ describe("profile doctor", () => {
 		})
 	})
 
-	it("returns the profile doctor exit code", async () => {
+	unix("returns the profile doctor exit code", async () => {
 		await withIsolatedConfig(async () => {
 			await ProfileManager.create().add("failing")
 			const doctor = join(getProfileDir("failing"), "doctor")
@@ -62,7 +64,7 @@ describe("profile doctor", () => {
 		})
 	})
 
-	it("keeps doctor stdout out of the JSON result stream", async () => {
+	unix("keeps doctor stdout out of the JSON result stream", async () => {
 		await withIsolatedConfig(async () => {
 			await ProfileManager.create().add("json")
 			const doctor = join(getProfileDir("json"), "doctor")
@@ -106,7 +108,41 @@ describe("profile doctor", () => {
 				Object.defineProperty(process, "platform", { value: originalPlatform })
 			}
 			expect(command.toLowerCase()).toContain("cmd")
-			expect(args.at(-1)).toBe(`"${doctor}"`)
+			expect(args.at(-1)).toBe(`""${JSON.stringify(doctor)}"`)
+		})
+	})
+
+	it("runs doctor.exe directly on Windows", async () => {
+		await withIsolatedConfig(async () => {
+			await ProfileManager.create().add("binary")
+			const doctor = join(getProfileDir("binary"), "doctor.exe")
+			await writeFile(doctor, "")
+			const originalPlatform = process.platform
+			Object.defineProperty(process, "platform", { value: "win32" })
+			let command = ""
+			const spawned = {
+				stdout: undefined,
+				on(event: string, listener: (value?: number) => void) {
+					if (event === "close") listener(0)
+					return spawned
+				},
+			}
+			mock.module("node:child_process", () => ({
+				spawn: (file: string) => {
+					command = file
+					return spawned
+				},
+			}))
+			try {
+				const { runProfileDoctor: runWindowsDoctor } = await import(
+					`../../src/commands/profile/index?exe=${Date.now()}`
+				)
+				expect((await runWindowsDoctor("binary")).exitCode).toBe(0)
+			} finally {
+				mock.restore()
+				Object.defineProperty(process, "platform", { value: originalPlatform })
+			}
+			expect(command).toBe(doctor)
 		})
 	})
 
@@ -142,12 +178,12 @@ describe("profile doctor", () => {
 				mock.restore()
 				Object.defineProperty(process, "platform", { value: originalPlatform })
 			}
-			expect(args.at(-1)).toBe(`"${doctor}"`)
+			expect(args.at(-1)).toBe(`""${JSON.stringify(doctor)}"`)
 			expect(args.at(-1)?.includes("&calc")).toBe(true)
 		})
 	})
 
-	it("rejects a doctor that is not executable", async () => {
+	unix("rejects a doctor that is not executable", async () => {
 		await withIsolatedConfig(async () => {
 			await ProfileManager.create().add("plain")
 			await mkdir(getProfileDir("plain"), { recursive: true })
