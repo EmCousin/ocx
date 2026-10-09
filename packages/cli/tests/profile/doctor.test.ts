@@ -66,18 +66,22 @@ describe("profile doctor", () => {
 		await withIsolatedConfig(async () => {
 			await ProfileManager.create().add("json")
 			const doctor = join(getProfileDir("json"), "doctor")
-			await writeFile(doctor, "#!/bin/sh\nprintf 'not json\\n'\nexit 3\n")
+			await writeFile(doctor, "#!/bin/sh\nprintf 'not json\\n'\nprintf 'not json\\n' >&2\nexit 3\n")
 			await chmod(doctor, 0o755)
 			const lines: string[] = []
-			const originalWrite = process.stdout.write.bind(process.stdout)
-			process.stdout.write = ((chunk: string | Uint8Array) => {
+			const capture = ((chunk: string | Uint8Array) => {
 				lines.push(chunk.toString())
 				return true
 			}) as typeof process.stdout.write
+			const originalStdout = process.stdout.write
+			const originalStderr = process.stderr.write
+			process.stdout.write = capture
+			process.stderr.write = capture
 			try {
 				expect(await runProfileDoctor("json", { json: true })).toBe(3)
 			} finally {
-				process.stdout.write = originalWrite
+				process.stdout.write = originalStdout
+				process.stderr.write = originalStderr
 			}
 			expect(lines.join("")).not.toContain("not json")
 		})

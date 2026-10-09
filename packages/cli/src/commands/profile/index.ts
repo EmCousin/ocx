@@ -89,13 +89,12 @@ export async function runProfileDoctor(
 	return await new Promise((resolve, reject) => {
 		const child = windowsScript
 			? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", doctor], {
-					stdio: options.json ? ["ignore", "pipe", "inherit"] : "inherit",
+					stdio: options.json ? "ignore" : "inherit",
 					windowsVerbatimArguments: true,
 				})
 			: spawn(doctor, {
-					stdio: options.json ? ["ignore", "pipe", "inherit"] : "inherit",
+					stdio: options.json ? "ignore" : "inherit",
 				})
-		child.stdout?.resume()
 		child.on("error", reject)
 		child.on("close", (code) => resolve(code ?? 1))
 	})
