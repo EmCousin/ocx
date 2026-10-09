@@ -83,6 +83,10 @@ export interface ProfileDoctorResult {
 	stderr: string
 }
 
+function quoteCmdPath(path: string): string {
+	return `"${path.replaceAll('"', '""')}"`
+}
+
 function collectStream(stream: NodeJS.ReadableStream | null, chunks: Buffer[]): void {
 	stream?.on("data", (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)))
 }
@@ -101,7 +105,7 @@ export async function runProfileDoctor(
 	const stdio = options.json ? (["ignore", "pipe", "pipe"] as const) : ("inherit" as const)
 	return await new Promise((resolve, reject) => {
 		const child = windowsScript
-			? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", doctor], {
+			? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", quoteCmdPath(doctor)], {
 					stdio,
 					windowsVerbatimArguments: true,
 				})
@@ -220,7 +224,7 @@ export function registerProfileCommand(program: Command): void {
 						stdout: result.stdout,
 						stderr: result.stderr,
 					})
-				if (result.exitCode !== 0) process.exitCode = result.exitCode
+				if (result.exitCode !== 0) process.exit(result.exitCode)
 			} catch (error) {
 				handleError(error, { json: options.json })
 			}
