@@ -77,26 +77,45 @@ async function assertDoctorFile(selected: string, doctor: string): Promise<void>
 	}
 }
 
+export interface ProfileDoctorResult {
+	exitCode: number
+	stdout: string
+	stderr: string
+}
+
+function collectStream(stream: NodeJS.ReadableStream | null, chunks: Buffer[]): void {
+	stream?.on("data", (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)))
+}
+
 export async function runProfileDoctor(
 	name: string | undefined,
 	options: { json?: boolean } = {},
-): Promise<number> {
+): Promise<ProfileDoctorResult> {
 	const manager = ProfileManager.create()
 	const selected = await manager.resolveProfile(name)
 	const doctor = join(getProfileDir(selected), "doctor")
 	await assertDoctorFile(selected, doctor)
 	const windowsScript = process.platform === "win32" && extname(doctor).toLowerCase() !== ".exe"
+	const stdout: Buffer[] = []
+	const stderr: Buffer[] = []
+	const stdio = options.json ? (["ignore", "pipe", "pipe"] as const) : ("inherit" as const)
 	return await new Promise((resolve, reject) => {
 		const child = windowsScript
 			? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", doctor], {
-					stdio: options.json ? "ignore" : "inherit",
+					stdio,
 					windowsVerbatimArguments: true,
 				})
-			: spawn(doctor, {
-					stdio: options.json ? "ignore" : "inherit",
-				})
+			: spawn(doctor, { stdio })
+		collectStream(child.stdout, stdout)
+		collectStream(child.stderr, stderr)
 		child.on("error", reject)
-		child.on("close", (code) => resolve(code ?? 1))
+		child.on("close", (code) =>
+			resolve({
+				exitCode: code ?? 1,
+				stdout: Buffer.concat(stdout).toString("utf8"),
+				stderr: Buffer.concat(stderr).toString("utf8"),
+			}),
+		)
 	})
 }
 
@@ -192,9 +211,16 @@ export function registerProfileCommand(program: Command): void {
 			try {
 				if (!options.profile) throw new ValidationError("Usage: ocx profile doctor --profile <name>")
 				const selected = await ProfileManager.create().resolveProfile(options.profile)
-				const exitCode = await runProfileDoctor(selected, { json: options.json })
-				if (options.json) outputJson({ success: exitCode === 0, profile: selected, exitCode })
-				if (exitCode !== 0) process.exitCode = exitCode
+				const result = await runProfileDoctor(selected, { json: options.json })
+				if (options.json)
+					outputJson({
+						success: result.exitCode === 0,
+						profile: selected,
+						exitCode: result.exitCode,
+						stdout: result.stdout,
+						stderr: result.stderr,
+					})
+				if (result.exitCode !== 0) process.exitCode = result.exitCode
 			} catch (error) {
 				handleError(error, { json: options.json })
 			}

@@ -28,7 +28,7 @@ describe("profile doctor", () => {
 			await writeFile(doctor, "#!/bin/sh\nprintf 'checked ok\\n'\nexit 0\n")
 			await chmod(doctor, 0o755)
 
-			expect(await runProfileDoctor("checked")).toBe(0)
+			expect((await runProfileDoctor("checked")).exitCode).toBe(0)
 		})
 	})
 
@@ -39,7 +39,7 @@ describe("profile doctor", () => {
 			await writeFile(doctor, "#!/bin/sh\nprintf 'missing token\\n' >&2\nexit 7\n")
 			await chmod(doctor, 0o755)
 
-			expect(await runProfileDoctor("failing")).toBe(7)
+			expect((await runProfileDoctor("failing")).exitCode).toBe(7)
 		})
 	})
 
@@ -66,24 +66,10 @@ describe("profile doctor", () => {
 		await withIsolatedConfig(async () => {
 			await ProfileManager.create().add("json")
 			const doctor = join(getProfileDir("json"), "doctor")
-			await writeFile(doctor, "#!/bin/sh\nprintf 'not json\\n'\nprintf 'not json\\n' >&2\nexit 3\n")
+			await writeFile(doctor, "#!/bin/sh\nprintf 'plain out\\n'\nprintf 'plain err\\n' >&2\nexit 3\n")
 			await chmod(doctor, 0o755)
-			const lines: string[] = []
-			const capture = ((chunk: string | Uint8Array) => {
-				lines.push(chunk.toString())
-				return true
-			}) as typeof process.stdout.write
-			const originalStdout = process.stdout.write
-			const originalStderr = process.stderr.write
-			process.stdout.write = capture
-			process.stderr.write = capture
-			try {
-				expect(await runProfileDoctor("json", { json: true })).toBe(3)
-			} finally {
-				process.stdout.write = originalStdout
-				process.stderr.write = originalStderr
-			}
-			expect(lines.join("")).not.toContain("not json")
+			const result = await runProfileDoctor("json", { json: true })
+			expect(result).toEqual({ exitCode: 3, stdout: "plain out\n", stderr: "plain err\n" })
 		})
 	})
 
@@ -114,7 +100,7 @@ describe("profile doctor", () => {
 				const { runProfileDoctor: runWindowsDoctor } = await import(
 					`../../src/commands/profile/index?windows=${Date.now()}`
 				)
-				expect(await runWindowsDoctor("windows")).toBe(0)
+				expect((await runWindowsDoctor("windows")).exitCode).toBe(0)
 			} finally {
 				mock.restore()
 				Object.defineProperty(process, "platform", { value: originalPlatform })
