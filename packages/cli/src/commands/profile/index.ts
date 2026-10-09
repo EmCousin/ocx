@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { constants } from "node:fs"
-import { access, writeFile } from "node:fs/promises"
+import { access, lstat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Command } from "commander"
 import { readGlobalConfig } from "../../config/files"
@@ -57,19 +57,39 @@ export async function addProfile(name: string, options: ProfileAddOptions): Prom
 	})
 }
 
-export async function runProfileDoctor(name: string | undefined): Promise<number> {
-	const manager = ProfileManager.create()
-	const selected = await manager.resolveProfile(name)
-	const doctor = join(getProfileDir(selected), "doctor")
+async function assertDoctorFile(selected: string, doctor: string): Promise<void> {
+	let stats: Awaited<ReturnType<typeof lstat>>
 	try {
-		await access(doctor, constants.X_OK)
+		stats = await lstat(doctor)
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT")
 			throw new ConfigError(`Profile "${selected}" has no executable doctor script at ${doctor}.`)
-		throw new ConfigError(`Profile doctor is not executable: ${doctor}`)
+		throw error
 	}
+	if (!stats.isFile()) throw new ConfigError(`Profile doctor must be a regular file: ${doctor}`)
+	if (process.platform === "win32") return
+	try {
+		await access(doctor, constants.X_OK)
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EACCES")
+			throw new ConfigError(`Profile doctor is not executable: ${doctor}`)
+		throw error
+	}
+}
+
+export async function runProfileDoctor(
+	name: string | undefined,
+	options: { json?: boolean } = {},
+): Promise<number> {
+	const manager = ProfileManager.create()
+	const selected = await manager.resolveProfile(name)
+	const doctor = join(getProfileDir(selected), "doctor")
+	await assertDoctorFile(selected, doctor)
 	return await new Promise((resolve, reject) => {
-		const child = spawn(doctor, { stdio: "inherit" })
+		const child = spawn(doctor, {
+			stdio: options.json ? ["ignore", "pipe", "inherit"] : "inherit",
+		})
+		child.stdout?.resume()
 		child.on("error", reject)
 		child.on("close", (code) => resolve(code ?? 1))
 	})
@@ -167,7 +187,7 @@ export function registerProfileCommand(program: Command): void {
 			try {
 				if (!options.profile) throw new ValidationError("Usage: ocx profile doctor --profile <name>")
 				const selected = await ProfileManager.create().resolveProfile(options.profile)
-				const exitCode = await runProfileDoctor(selected)
+				const exitCode = await runProfileDoctor(selected, { json: options.json })
 				if (options.json) outputJson({ success: exitCode === 0, profile: selected, exitCode })
 				if (exitCode !== 0) process.exitCode = exitCode
 			} catch (error) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runProfileDoctor } from "../../src/commands/profile/index"
@@ -16,6 +16,7 @@ async function withIsolatedConfig(run: () => Promise<void>): Promise<void> {
 	} finally {
 		if (originalXdg !== undefined) process.env.XDG_CONFIG_HOME = originalXdg
 		else delete process.env.XDG_CONFIG_HOME
+		await rm(root, { recursive: true, force: true })
 	}
 }
 
@@ -46,7 +47,39 @@ describe("profile doctor", () => {
 		await withIsolatedConfig(async () => {
 			await ProfileManager.create().add("empty")
 
-			await expect(runProfileDoctor("empty")).rejects.toBeInstanceOf(ConfigError)
+			await expect(runProfileDoctor("empty")).rejects.toThrow(
+				'Profile "empty" has no executable doctor script',
+			)
+		})
+	})
+
+	it("rejects a directory named doctor", async () => {
+		await withIsolatedConfig(async () => {
+			await ProfileManager.create().add("directory")
+			await mkdir(join(getProfileDir("directory"), "doctor"))
+
+			await expect(runProfileDoctor("directory")).rejects.toThrow("must be a regular file")
+		})
+	})
+
+	it("keeps doctor stdout out of the JSON result stream", async () => {
+		await withIsolatedConfig(async () => {
+			await ProfileManager.create().add("json")
+			const doctor = join(getProfileDir("json"), "doctor")
+			await writeFile(doctor, "#!/bin/sh\nprintf 'not json\\n'\nexit 3\n")
+			await chmod(doctor, 0o755)
+			const lines: string[] = []
+			const originalWrite = process.stdout.write.bind(process.stdout)
+			process.stdout.write = ((chunk: string | Uint8Array) => {
+				lines.push(chunk.toString())
+				return true
+			}) as typeof process.stdout.write
+			try {
+				expect(await runProfileDoctor("json", { json: true })).toBe(3)
+			} finally {
+				process.stdout.write = originalWrite
+			}
+			expect(lines.join("")).not.toContain("not json")
 		})
 	})
 
